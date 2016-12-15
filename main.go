@@ -9,15 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+	"compress/gzip"
 )
 
 func main() {
-	srcDir := flag.String("srcdir", "", "The path of the directory to embed")
+	dir := flag.String("dir", "", "The path of the directory to embed")
 	pkgName := flag.String("pkgname", "", "The name of the package to generate")
 	flag.Parse()
 
-	if *srcDir == "" {
-		fmt.Fprintf(os.Stderr, "missing -srcdir\n")
+	if *dir == "" {
+		fmt.Fprintf(os.Stderr, "missing -dir\n")
 		os.Exit(1)
 	}
 
@@ -26,9 +27,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	archiveBytes, err := getArchiveBytes(*srcDir)
+	archiveBytes, err := getArchiveBytes(*dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error generating package %s from %s: %s\n", *pkgName, *srcDir, err)
+		fmt.Fprintf(os.Stderr, "error generating package %s from %s: %s\n", *pkgName, *dir, err)
 		os.Exit(1)
 	}
 
@@ -39,20 +40,57 @@ func main() {
 	}
 }
 
-func getArchiveBytes(srcDir string) ([]byte, error) {
+func getArchiveBytes(dir string) ([]byte, error) {
 	buf := bytes.Buffer{}
-	w := tar.NewWriter(&buf)
+	
+	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+	tw := tar.NewWriter(w)
+
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = path[len(dir):]
+		
+		err = tw.WriteHeader(hdr)
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(tw, f)
+		if err != nil {
+			return err
+		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error walking input directive: %s", err)
 	}
 
-	err = w.Close()
+	err = tw.Close()
 	if err != nil {
 		return nil, fmt.Errorf("error creating archive: %s", err)
+	}
+
+	err = w.Close()
+	if err != nil {
+		return nil, fmt.Errorf("closing gzip stream: %s", err)
 	}
 
 	return buf.Bytes(), nil
@@ -61,22 +99,6 @@ func getArchiveBytes(srcDir string) ([]byte, error) {
 func bytesToGoString(data []byte) string {
 	buf := bytes.Buffer{}
 	for _, b := range data {
-		if b == '\n' {
-			buf.WriteString(`\n`)
-			continue
-		}
-		if b == '\\' {
-			buf.WriteString(`\\`)
-			continue
-		}
-		if b == '"' {
-			buf.WriteString(`\"`)
-			continue
-		}
-		if (b >= 32 && b <= 126) || b == '\t' {
-			buf.WriteByte(b)
-			continue
-		}
 		_, _ = fmt.Fprintf(&buf, "\\x%02x", b)
 	}
 	return `"` + buf.String() + `"`
@@ -98,6 +120,10 @@ var packageTemplateText string = `
 package {{.PkgName}}
 
 var data string = {{.DataString}}
+
+func init() {
+	bytes
+}
 `
 
 func init() {
