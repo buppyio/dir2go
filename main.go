@@ -51,7 +51,7 @@ func getArchiveBytes(dir string) ([]byte, error) {
 	tw := tar.NewWriter(w)
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() {
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 
@@ -116,39 +116,70 @@ func writePackage(w io.Writer, pkgName string, archive []byte) error {
 }
 
 var packageTemplate *template.Template
-var packageTemplateText string = `
-package {{.PkgName}}
+var packageTemplateText string = `package {{.PkgName}}
 
 import (
-	"io/ioutil"
+	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
 )
 
 type EmbeddedFile struct {
-	Info os.FileInfo
+	Info     os.FileInfo
 	Contents []byte
 }
 
-var files map[string]*EmbeddedFile
-var initialized = false
-
-func GetFiles() map[string]*EmbeddedFile {
-	if !initialized {
-		loadFiles()
-		initialized = true
-	}
-	return files
+type EmbeddedFileHandle struct {
+	File *EmbeddedFile
+	R    *bytes.Reader
 }
 
-func loadFiles() {
-	files = make(map[string]*EmbeddedFile)
+func (h *EmbeddedFileHandle) Read(buf []byte) (int, error) {
+	return h.R.Read(buf)
+}
 
-	tr, err := tar.NewReader(gzip.NewReader(bytes.NewBuffer(data)))
+func (h *EmbeddedFileHandle) Seek(offset int64, whence int) (int64, error) {
+	return h.R.Seek(offset, whence)
+}
+
+func (h *EmbeddedFileHandle) Close() error {
+	return nil
+}
+
+func (h *EmbeddedFileHandle) Readdir(count int) ([]os.FileInfo, error) {
+	return nil, os.ErrPermission
+}
+
+func (h *EmbeddedFileHandle) Stat() (os.FileInfo, error) {
+	return h.File.Info, nil
+}
+
+type FileSystem map[string]*EmbeddedFile
+
+func (fs FileSystem) Open(name string) (http.File, error) {
+	f, ok := fs[name[1:]]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return &EmbeddedFileHandle{
+		File: f,
+		R:    bytes.NewReader(f.Contents),
+	}, nil
+}
+
+func LoadFiles() {
+	Files = make(FileSystem)
+
+	gz, err := gzip.NewReader(bytes.NewBuffer([]byte(data)))
 	if err != nil {
 		panic(err)
 	}
 
-	files = make(map[string]*EmbeddedFile)
+	tr := tar.NewReader(gz)
 
 	for {
 		hdr, err := tr.Next()
@@ -159,19 +190,24 @@ func loadFiles() {
 			panic(err)
 		}
 
-		if hdr.TypeFlag != tar.TypeReg {
+		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 
-		contents, err := ioutil.ReadFull(tr)
+		contents, err := ioutil.ReadAll(tr)
 		if err != nil {
 			panic(err)
+		}
+
+		Files[hdr.Name] = &EmbeddedFile{
+			Info:     hdr.FileInfo(),
+			Contents: contents,
 		}
 	}
 
 }
 
-
+var Files FileSystem
 var data string = {{.DataString}}
 `
 
