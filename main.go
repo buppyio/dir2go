@@ -3,13 +3,13 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"text/template"
-	"compress/gzip"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 
 func getArchiveBytes(dir string) ([]byte, error) {
 	buf := bytes.Buffer{}
-	
+
 	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func getArchiveBytes(dir string) ([]byte, error) {
 			return err
 		}
 		hdr.Name = path[len(dir):]
-		
+
 		err = tw.WriteHeader(hdr)
 		if err != nil {
 			return err
@@ -119,11 +119,60 @@ var packageTemplate *template.Template
 var packageTemplateText string = `
 package {{.PkgName}}
 
-var data string = {{.DataString}}
+import (
+	"io/ioutil"
+	"compress/gzip"
+)
 
-func init() {
-	bytes
+type EmbeddedFile struct {
+	Info os.FileInfo
+	Contents []byte
 }
+
+var files map[string]*EmbeddedFile
+var initialized = false
+
+func GetFiles() map[string]*EmbeddedFile {
+	if !initialized {
+		loadFiles()
+		initialized = true
+	}
+	return files
+}
+
+func loadFiles() {
+	files = make(map[string]*EmbeddedFile)
+
+	tr, err := tar.NewReader(gzip.NewReader(bytes.NewBuffer(data)))
+	if err != nil {
+		panic(err)
+	}
+
+	files = make(map[string]*EmbeddedFile)
+
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			panic(err)
+		}
+
+		if hdr.TypeFlag != tar.TypeReg {
+			continue
+		}
+
+		contents, err := ioutil.ReadFull(tr)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+}
+
+
+var data string = {{.DataString}}
 `
 
 func init() {
