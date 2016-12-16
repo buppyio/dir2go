@@ -65,8 +65,10 @@ func getArchiveBytes(dir string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
+
+	pathSep := fmt.Sprintf("%c", filepath.Separator)
+	if !strings.HasSuffix(dir, pathSep) {
+		dir += pathSep
 	}
 
 	buf := bytes.Buffer{}
@@ -79,6 +81,10 @@ func getArchiveBytes(dir string) ([]byte, error) {
 	tw := tar.NewWriter(w)
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if !info.Mode().IsRegular() {
 			return nil
 		}
@@ -107,6 +113,7 @@ func getArchiveBytes(dir string) ([]byte, error) {
 
 		return nil
 	})
+
 	if err != nil {
 		return nil, fmt.Errorf("error walking input directive: %s", err)
 	}
