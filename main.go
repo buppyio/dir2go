@@ -99,7 +99,7 @@ func getArchiveBytes(dir string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		hdr.Name = path[len(dir)-1:]
+		hdr.Name = filepath.ToSlash(path[len(dir)-1:])
 
 		err = tw.WriteHeader(hdr)
 		if err != nil {
